@@ -148,6 +148,54 @@ fn missing_project_can_be_removed_with_normalized_path() {
 }
 
 #[test]
+fn missing_project_removal_resolves_symlinks_before_parent_components() {
+    let sandbox = Sandbox::new();
+    let unrelated = sandbox.project("gone");
+    let actual = sandbox.root.join("actual");
+    fs::create_dir_all(actual.join("live")).unwrap();
+    let missing = actual.join("gone");
+    fs::rename(sandbox.project("missing"), &missing).unwrap();
+    sandbox.add(&unrelated);
+    sandbox.add(&missing);
+    fs::rename(&missing, actual.join("moved")).unwrap();
+    std::os::unix::fs::symlink(actual.join("live"), sandbox.root.join("link")).unwrap();
+
+    success(sandbox.run(&["remove", "link/../gone"]));
+    let listed = success(sandbox.run(&["list"]));
+    assert!(listed.contains("1 projects"));
+    assert!(listed.contains(unrelated.to_str().unwrap()));
+    assert!(!listed.contains(missing.to_str().unwrap()));
+    assert!(actual.join("moved/target/artifact").exists());
+}
+
+#[test]
+fn relative_cargo_home_overrides_are_skipped_from_both_working_directories() {
+    let sandbox = Sandbox::new();
+    let project = sandbox.project("project");
+    sandbox.add(&project);
+    for root in [&project, &sandbox.root] {
+        let config = root.join("custom-cargo/config.toml");
+        fs::create_dir_all(config.parent().unwrap()).unwrap();
+        fs::write(&config, "[build]\ntarget-dir='external'\n").unwrap();
+        for mode in ["--dry-run", "--yes"] {
+            let output = sandbox
+                .command()
+                .env("CARGO_HOME", "custom-cargo")
+                .args(["clean", mode])
+                .output()
+                .unwrap();
+            assert!(!output.status.success());
+            assert!(
+                String::from_utf8_lossy(&output.stderr)
+                    .contains("non-standard target configuration")
+            );
+            assert!(project.join("target/artifact").exists());
+        }
+        fs::remove_file(config).unwrap();
+    }
+}
+
+#[test]
 fn unsafe_project_is_counted_but_other_projects_are_cleaned() {
     let sandbox = Sandbox::new();
     let bad = sandbox.project("bad");

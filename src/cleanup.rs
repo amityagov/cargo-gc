@@ -28,7 +28,8 @@ fn target_config_is_nonstandard(root: &Path) -> io::Result<bool> {
         }
     }
     let mut directories = BTreeSet::new();
-    for start in [root.to_path_buf(), std::env::current_dir()?] {
+    let current_directory = std::env::current_dir()?;
+    for start in [root.to_path_buf(), current_directory.clone()] {
         for ancestor in start.ancestors() {
             directories.insert(ancestor.join(".cargo"));
         }
@@ -37,7 +38,10 @@ fn target_config_is_nonstandard(root: &Path) -> io::Result<bool> {
         .map(PathBuf::from)
         .or_else(|| dirs::home_dir().map(|home| home.join(".cargo")))
     {
-        directories.insert(home);
+        // Cargo validation runs from the project root. Inspect both meanings
+        // of a relative CARGO_HOME, including the caller's configuration.
+        directories.insert(root.join(&home));
+        directories.insert(current_directory.join(home));
     }
     for directory in directories {
         for name in ["config", "config.toml"] {

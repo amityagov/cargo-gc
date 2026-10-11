@@ -119,7 +119,11 @@ pub fn normalize_path(path: &Path) -> io::Result<PathBuf> {
         Err(error) if error.kind() == io::ErrorKind::NotFound => {}
         Err(error) => return Err(error),
     }
-    let absolute = std::path::absolute(path)?;
+    let absolute = if path.is_absolute() {
+        path.to_path_buf()
+    } else {
+        std::env::current_dir()?.join(path)
+    };
     let mut normalized = PathBuf::new();
     for component in absolute.components() {
         match component {
@@ -127,15 +131,17 @@ pub fn normalize_path(path: &Path) -> io::Result<PathBuf> {
             Component::ParentDir => {
                 normalized.pop();
             }
+            Component::Normal(name) => {
+                normalized.push(name);
+                // Resolve existing components before a later `..` can remove
+                // them. Missing components still support lexical normalization.
+                match fs::canonicalize(&normalized) {
+                    Ok(canonical) => normalized = canonical,
+                    Err(error) if error.kind() == io::ErrorKind::NotFound => {}
+                    Err(error) => return Err(error),
+                }
+            }
             _ => normalized.push(component.as_os_str()),
-        }
-    }
-    // Canonicalize the existing prefix (e.g. macOS /var -> /private/var).
-    for prefix in normalized.ancestors() {
-        match fs::canonicalize(prefix) {
-            Ok(canonical) => return Ok(canonical.join(normalized.strip_prefix(prefix).unwrap())),
-            Err(error) if error.kind() == io::ErrorKind::NotFound => {}
-            Err(error) => return Err(error),
         }
     }
     Ok(normalized)
